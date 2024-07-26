@@ -7,3 +7,7 @@ docker/plugins/operators/__pycache__
 logs/*
 docker/dags/logs/
 docker/*.env
+myenv
+.myenv
+venv 
+.venv
