@@ -1,68 +1,78 @@
+from datetime import datetime, timedelta
 from airflow import DAG
-from datetime import datetime
+from airflow.operators.python import PythonOperator
 from airflow.providers.http.operators.http import SimpleHttpOperator
-from airflow.operators.postgres_operator import PostgresOperator
-from airflow.hooks.postgres_hook import PostgresHook
-from airflow.decorators import task
+from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.providers.postgres.operators.postgres import PostgresOperator
+from airflow.utils.dates import days_ago
 import json
 
-with DAG(
-    dag_id = 'airflow',
-    schedule=None,
-    start_date=datetime(2023, 11, 11),
-    catchup=False
-) as dag:
 
-    predict_multiple_names = SimpleHttpOperator(
-        task_id="predict_multiple_names",
-        endpoint="/gender/by-first-name-multiple",
-        method="POST",
-        data='[{"first_name":"Galih","country":"ID"},{"first_name":"Ratna","country":"ID"}]',
-        http_conn_id="gender_api",
-        log_response=True,
-        dag=dag
-    )
-
-    create_table_in_pg = PostgresOperator(
-        task_id = 'create_table_in_pg',
-        sql = ('CREATE TABLE IF NOT EXISTS gender_name_prediction ' +
-        '(' +
-            'input TEXT, ' +
-            'details TEXT, ' +
-            'result_found BOOL, ' +
-            'first_name TEXT, ' +
-            'probability FLOAT(53), ' +
-            'gender TEXT, ' +
-            'timestamp TIMESTAMP WITHOUT TIME ZONE DEFAULT current_timestamp ' +
-        ')'),
-        postgres_conn_id='pg_conn_id', 
-        autocommit=True,
-        dag=dag
-    )
-
-    @task
-    def load_to_pg(ti=None):
-        predicted_names = ti.xcom_pull(task_ids='predict_multiple_names', key=None)
-        json_data = json.loads(predicted_names)
-        insert = '''
-            INSERT INTO gender_name_prediction (input, details, result_found, first_name, probability, gender)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        '''
-        
-        pg_hook = PostgresHook(postgres_conn_id='pg_conn_id').get_conn()
-        with pg_hook.cursor() as cursor:
-            for data in json_data:
-                input = json.dumps(data['input'])
-                details = json.dumps(data['details'])
-                result_found = data['result_found']
-                first_name = data['first_name']
-                probability = data['probability']
-                gender = data['gender']
-
-                cursor.execute(insert, (input, details, result_found, first_name, probability, gender))
-            
-        pg_hook.commit()
-        pg_hook.close()
-
-    predict_multiple_names >> create_table_in_pg >> load_to_pg()
-    
+dag = DAG(
+        'task2_airflow_zola',
+        description='Hello, Ini DAG Tugas 2 Zola',
+        schedule_interval='0 */5 * * *',
+        start_date=datetime(2022, 10, 21),
+        catchup=False
+)
+predict_names_task = SimpleHttpOperator(
+    task_id='profile_from_gender',
+    method='POST',
+    http_conn_id='gender_api_rais',
+    endpoint='/gender/by-first-name-multiple',
+    headers={"Content-Type": "application/json"},
+    data=json.dumps([
+  {
+    "first_name": "sandra",
+    "country": "US"
+  },
+  {
+    "first_name": "mike",
+    "country": "CA"
+  }
+]),
+    response_filter=lambda response: json.loads(response.text),
+    log_response=True,
+    dag=dag,
+)
+create_table_task = PostgresOperator(
+    task_id='create_table_to_postgres',
+    postgres_conn_id='pg_conn_rais',
+    sql="""
+    CREATE TABLE IF NOT EXISTS rais_gender_name_prediction_task2 (
+        input JSONB,
+        details JSONB,
+        result_found BOOLEAN,
+        first_name VARCHAR(50),
+        probability FLOAT,
+        gender VARCHAR(10),
+        timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
+    retries=3,
+    retry_delay=timedelta(minutes=5),
+    dag=dag,
+    autocommit=True,
+)
+def load_predictions_to_postgres(**kwargs):
+    ti = kwargs['ti']
+    predictions = ti.xcom_pull(task_ids='profile_from_gender')
+    pg_hook = PostgresHook(postgres_conn_id='pg_conn_rais')
+    for prediction in predictions:
+        input_data = json.dumps(prediction['input'])
+        details_data = json.dumps(prediction['details'])
+        result_found = prediction['result_found']
+        first_name = prediction['first_name']
+        probability = prediction['probability']
+        gender = prediction['gender']
+        pg_hook.run("""
+            INSERT INTO rais_gender_name_prediction_task2 (input, details, result_found, first_name, probability, gender)
+            VALUES (%s, %s, %s, %s, %s, %s);
+        """, parameters=(input_data, details_data, result_found, first_name, probability, gender))
+load_predictions_task = PythonOperator(
+    task_id='profile_gender_to_postgres',
+    python_callable=load_predictions_to_postgres,
+    provide_context=True,
+    dag=dag,
+)
+predict_names_task >> create_table_task >> load_predictions_task
