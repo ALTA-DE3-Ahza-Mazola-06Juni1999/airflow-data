@@ -9,16 +9,16 @@ import json
 
 
 dag = DAG(
-        'task2_airflow_zola',
+        'zola_task2_airflow',
         description='Hello, Ini DAG Tugas 2 Zola',
         schedule_interval='0 */5 * * *',
-        start_date=datetime(2022, 10, 21),
+        start_date=datetime(2020, 7, 22),
         catchup=False
 )
 predict_names_task = SimpleHttpOperator(
     task_id='profile_from_gender',
     method='POST',
-    http_conn_id='gender_api_rais',
+    http_conn_id='gender_api',
     endpoint='/gender/by-first-name-multiple',
     headers={"Content-Type": "application/json"},
     data=json.dumps([
@@ -37,9 +37,9 @@ predict_names_task = SimpleHttpOperator(
 )
 create_table_task = PostgresOperator(
     task_id='create_table_to_postgres',
-    postgres_conn_id='pg_conn_rais',
+    postgres_conn_id='pg_conn_id',
     sql="""
-    CREATE TABLE IF NOT EXISTS rais_gender_name_prediction_task2 (
+    CREATE TABLE IF NOT EXISTS zola_gender_name_prediction (
         input JSONB,
         details JSONB,
         result_found BOOLEAN,
@@ -57,7 +57,7 @@ create_table_task = PostgresOperator(
 def load_predictions_to_postgres(**kwargs):
     ti = kwargs['ti']
     predictions = ti.xcom_pull(task_ids='profile_from_gender')
-    pg_hook = PostgresHook(postgres_conn_id='pg_conn_rais')
+    pg_hook = PostgresHook(postgres_conn_id='pg_conn_id')
     for prediction in predictions:
         input_data = json.dumps(prediction['input'])
         details_data = json.dumps(prediction['details'])
@@ -66,7 +66,7 @@ def load_predictions_to_postgres(**kwargs):
         probability = prediction['probability']
         gender = prediction['gender']
         pg_hook.run("""
-            INSERT INTO rais_gender_name_prediction_task2 (input, details, result_found, first_name, probability, gender)
+            INSERT INTO zola_gender_name_prediction (input, details, result_found, first_name, probability, gender)
             VALUES (%s, %s, %s, %s, %s, %s);
         """, parameters=(input_data, details_data, result_found, first_name, probability, gender))
 load_predictions_task = PythonOperator(
